@@ -15,6 +15,7 @@
 #include <math.h>
 #include "HighSpeedProjector.h"
 #include <vector>
+#include <chrono>
 
 #define PROJ_HEIGHT 768
 #define PROJ_WIDTH 1024
@@ -165,17 +166,19 @@ void create_image_test(std::vector<cv::Mat> &result) {
 }
 
 
-
 int main() {
+
+	//プロジェクタを使わない場合は以下9行をコメントアウト
+	
 	// プロジェクタ周りの設定
 	HighSpeedProjector hsproj;
 	// 投影モードの設定
 	hsproj.set_projection_mode(PM::MIRROR);// ミラーモードON
 	hsproj.set_projection_mode(PM::ILLUMINANCE_HIGH);     // 高照度モードに変更( 長く投影している場合はONにしちゃだめ )
 	// 投影パラメタの設定
-	hsproj.set_parameter_value(PP::FRAME_RATE, 500);
+	hsproj.set_parameter_value(PP::FRAME_RATE, 100);
 	hsproj.set_parameter_value(PP::BUFFER_MAX_FRAME, 0);
-	hsproj.connect_projector();
+	
 
 /*
 	CameraUI cui;
@@ -241,7 +244,7 @@ int main() {
 	basler basler1;
 	basler1.connect(0);
 	// setParam関連は必ずスタート前に終わらせる 
-	basler1.setParam(paramTypeBasler::CaptureType::MonocroGrab);
+	basler1.setParam( paramTypeBasler::CaptureType::MonocroGrab);
 	basler1.setParam( paramType::HEIGHT, CAMERA_HEIGHT );
 	basler1.setParam( paramTypeBasler::Param::ExposureTime,1950.0f );
 	basler1.setParam( paramTypeBasler::AcquisitionMode::TriggerMode);
@@ -296,68 +299,58 @@ int main() {
 	//使用する変数を撮像前にまとめて定義
 	std::vector<cv::Mat> tmp1;// カメラ1の撮像画像を格納
 	std::vector<cv::Mat> tmp2;// カメラ2の撮像画像を格納
-	cv::Mat tmp2_reverse;
 	bool flag = true;
-	int frame = 0, frame1 = 0, frame2 = 0;
+	int frame1 = 0, frame2 = 0;
 
-
-	basler1.start();
-	basler2.start();
 	//2カメラでの撮像開始
 	std::thread thr1(
 		[&]()
 	{
+		basler1.start();
 		while (flag)
 		{
-			//basler1.start();
 			basler1.captureFrame(image1.data);
 			tmp1.push_back( image1.clone() );
 			//if (frame != 0) tmp1.at(frame1) = image1.clone();
+			//std::cout << tmp1.size() << std::endl;
 			frame1++;
 		}
 	}
 	);
 
+	
 	std::thread thr2(
 		[&]()
 	{
+		basler2.start();
 		while (flag)
 		{
-			//basler2.start();
 			basler2.captureFrame(image2.data);
 			tmp2.push_back( image2.clone() );
+			//std::cout << tmp2.size() << std::endl;
 			//if (frame != 0) tmp2.at(frame2) = image2.clone();
 			frame2++;
 		}
 	}
 	);
 
+	//スレッドの立ち上がり待機
+	std::this_thread::sleep_for(std::chrono::seconds(2));
 	
-	cv::namedWindow("image1");
-	cv::moveWindow("image1", 250, 150);
-	cv::namedWindow("image2");
-	cv::moveWindow("image2", 850, 150);
-	cv::namedWindow("diff");
-	cv::moveWindow("diff", 850, 700);
-	
-	
+
 	// プロジェクタでの投影開始
+	hsproj.connect_projector();
 	for (;; ) {
 		for (int i = 0; i < input.size(); i++) {
 			hsproj.send_image_8bit(input[i].data);
-			
-			/*
-			if ( frame < frame1 && frame < frame2 ) {
-				cv::imshow("image1", tmp1[frame]);
-				cv::flip(tmp2[frame], tmp2_reverse, 1);
-				cv::imshow("image2", tmp2_reverse);
-				cv::imshow("diff", abs(tmp1[frame] - tmp2_reverse));
-				std::cout << frame << std::endl;
+
+			//チェッカーパターンを投影するときは100fpsくらいにしましょう
+			if ( num == 1 && frame1<=frame2 ) {
+				if (tmp1[frame1-1].data != NULL || tmp2[frame1-1].data != NULL ) {
+					cv::imshow("diff", abs(abs(tmp1[frame1-1]) - abs(tmp2[frame1-1])));
+					cvWaitKey(1);
+				}
 			}
-			else cvWaitKey(1);
-			*/
-			
-			frame++;
 		}
 		if ( _kbhit()== true )  break;
 	}
@@ -386,10 +379,29 @@ int main() {
 		int start_size = 1000;
 		for (int i = 0; i < output_size; i++)
 		{
-			sprintf_s(Filename, "%s%03d.%s", _filename1, i, fileext);
-			cv::imwrite(Filename, tmp1[i + start_size]);
-			sprintf_s(Filename, "%s%03d.%s", _filename2, i, fileext);
-			cv::imwrite(Filename, tmp2[i + start_size]);
+			if (tmp1[i + start_size].data != NULL && tmp2[i + start_size].data != NULL) {
+				sprintf_s(Filename, "%s%03d.%s", _filename1, i, fileext);
+				cv::imwrite(Filename, tmp1[i + start_size]);
+				sprintf_s(Filename, "%s%03d.%s", _filename2, i, fileext);
+				cv::imwrite(Filename, tmp2[i + start_size]);
+			}
+			else
+				std::cout << "empty image" << std::endl;
+		}
+	}
+
+	else if (num == 1) {
+		if (frame1 < 1) {
+			return -1;
+		}
+		char Filename[100];
+		char _filename1[] = "check/";
+		char fileext[] = "bmp";
+
+		std::cout << "画像書き出し開始" << std::endl;
+		if (tmp1[frame1-1].data != NULL && tmp2[frame1-1].data != NULL) {
+			sprintf_s(Filename, "%s%03d.%s", _filename1, frame1-1, fileext);
+			cv::imwrite(Filename, abs(tmp1[frame1-1] - tmp2[frame1-1]));
 		}
 	}
 	
